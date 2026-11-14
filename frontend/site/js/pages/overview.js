@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { ENUMS, can } from '../config.js';
-import { clusterStatusBadge, fmtMoney, fmtPct, sectionHead } from '../components.js';
+import { clusterStatusBadge, fmtMoney, fmtPct, salaryBadge, sectionHead } from '../components.js';
 import { barList, emptyState, errorBox, errorMessage, esc, fmtTime, kv, statStrip, table, trendChart } from '../ui.js';
 
 function latestRunBlock(latest) {
@@ -15,6 +15,7 @@ function latestRunBlock(latest) {
     ['输入 / 输出', `${latest.posts_in} 条 → ${latest.clusters_out} 簇`],
     ['消重条数', `<b class="tabular">${latest.dupes_removed}</b>`],
     ['两两比较', `${metrics.pairs ?? '—'} 对 / 连边 ${metrics.edges ?? '—'} 条`],
+    ['薪资包 可比 / 不一致 / 不可比', `${metrics.salary_comparable ?? '—'} / ${metrics.salary_inconsistent ?? '—'} / ${metrics.salary_noncomparable ?? '—'}`],
     ['不可比占比', fmtPct(metrics.noncomparable_rate || 0)],
     ['开始时间', fmtTime(latest.started_at)],
   ])}
@@ -50,6 +51,8 @@ export const overviewPage = {
         <p class="deck">
           同期消重 <b>${data.dupes_removed}</b> 条重复挂载，多成员簇 <b>${data.clusters_multi}</b> 个；
           ${noncomparable} 条岗位薪资不可比（占 <b>${fmtPct(salary.noncomparable_rate)}</b>），其中 ${salary.unparsed} 条无法解析已进不可比清单；
+          归并后薪资包：可比 <b>${data.salary_package_counts.comparable}</b> 条、多来源不一致待复核 <b>${data.salary_package_counts.inconsistent}</b> 条、
+          全部不可比 <b>${data.salary_package_counts.noncomparable}</b> 条；
           ${data.clusters_expired} 个簇因岗位过期下线。
         </p>
         <div class="lead-figures">
@@ -79,7 +82,8 @@ export const overviewPage = {
               })),
             )}
             <div class="panel-note">
-              已归一 ${salary.parsed} 条 · 面议 ${salary.negotiable} 条 · 不可比 ${salary.unparsed} 条；解析失败率 ${fmtPct(salary.fail_rate)}。
+              已归一 ${salary.parsed} 条 · 面议 ${salary.negotiable} 条 · 不可比 ${salary.unparsed} 条；解析失败率 ${fmtPct(salary.fail_rate)}；含浮动收入 ${salary.with_variable} 条
+              （月薪 ${(salary.by_period || {}).month || 0} · 年薪 ${(salary.by_period || {}).year || 0} · 日薪 ${(salary.by_period || {}).day || 0}）。
             </div>
           </div>
         </section>
@@ -116,7 +120,8 @@ export const overviewPage = {
                     render: (row) => `<b>${esc(row.company)}</b><div class="cell-sub">${esc(row.title)}</div>`,
                   },
                   { key: 'city', label: '城市', className: 'tight' },
-                  { key: 'monthly_median', label: '月薪中位', className: 'num', render: (row) => fmtMoney(row.monthly_median) },
+                  { key: 'salary_status', label: '薪资包', render: (row) => salaryBadge(row) },
+                  { key: 'monthly_median', label: '月薪中位（单一来源）', className: 'num', render: (row) => (row.salary_status === 'comparable' ? fmtMoney(row.monthly_median) : '—') },
                   { key: 'member_count', label: '成员 / 渠道', className: 'num', render: (row) => `${row.member_count} / ${row.channel_count}` },
                   { key: 'confidence', label: '置信度', className: 'num', render: (row) => Number(row.confidence).toFixed(3) },
                   { key: 'status_label', label: '状态', render: (row) => clusterStatusBadge(row) },

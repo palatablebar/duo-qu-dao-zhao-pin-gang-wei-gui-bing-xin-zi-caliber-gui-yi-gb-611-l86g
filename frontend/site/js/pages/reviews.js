@@ -1,13 +1,14 @@
 import { api } from '../api.js';
 import { ENUMS, can, decisionTone } from '../config.js';
-import { fmtMoney, fmtPct, openClusterDrawer, sectionHead } from '../components.js';
+import { fmtMoney, openClusterDrawer, salaryBadge, sectionHead } from '../components.js';
 import { emptyState, errorBox, errorMessage, esc, fmtTime, table, toast } from '../ui.js';
 
 const EXPORTS = [
-  { path: '/api/exports/clusters.csv', file: 'jobmerge-clusters.csv', label: '归并清单 CSV', hint: '一行一个归并簇，含月薪中位与置信度' },
-  { path: '/api/exports/posts.csv', file: 'jobmerge-posts.csv', label: '岗位口径 CSV', hint: '薪资原值 → 归一值 + 口径说明' },
+  { path: '/api/exports/clusters.csv', file: 'jobmerge-clusters.csv', label: '归并清单 CSV', hint: '一行一个归并簇，含薪资包状态与采用来源' },
+  { path: '/api/exports/posts.csv', file: 'jobmerge-posts.csv', label: '岗位口径 CSV', hint: '薪资原值 → 固定/浮动/可比月薪 + 换算过程' },
   { path: '/api/exports/reviews.csv', file: 'jobmerge-reviews.csv', label: '复核记录 CSV', hint: '结论、复核人与备注' },
   { path: '/api/exports/runs.csv', file: 'jobmerge-runs.csv', label: '运行记录 CSV', hint: '每次归并的输入/产出/不可比占比' },
+  { path: '/api/exports/cluster-sources.csv', file: 'jobmerge-cluster-sources.csv', label: '来源薪资明细 CSV', hint: '每簇每条来源的原值、周期、固定/浮动与换算过程' },
 ];
 
 function auditPanel(items) {
@@ -43,13 +44,19 @@ export const reviewsPage = {
     let pending;
     let history;
     let audit = null;
+    let reconcile = null;
     try {
-      const jobs = [api.get('/api/reviews/pending', { limit: 20 }), api.get('/api/reviews', { limit: 20 })];
+      const jobs = [
+        api.get('/api/reviews/pending', { limit: 20 }),
+        api.get('/api/reviews', { limit: 20 }),
+        api.get('/api/clusters/reconcile'),
+      ];
       if (can(ctx.user.role, 'audit:read')) jobs.push(api.get('/api/audit', { limit: 30 }));
       const results = await Promise.all(jobs);
       pending = results[0];
       history = results[1];
-      audit = results[2]?.items || null;
+      reconcile = results[2];
+      audit = results[3]?.items || null;
     } catch (err) {
       view.innerHTML = errorBox(errorMessage(err));
       view.querySelector('#retry-btn')?.addEventListener('click', render);
@@ -72,8 +79,8 @@ export const reviewsPage = {
                     },
                     { key: 'city', label: '城市', className: 'tight' },
                     { key: 'member_count', label: '成员 / 渠道', className: 'num', render: (row) => `${row.member_count} / ${row.channel_count}` },
-                    { key: 'salary_basis', label: '薪资写法', className: 'mono' },
-                    { key: 'monthly_median', label: '月薪中位', className: 'num', render: (row) => fmtMoney(row.monthly_median) },
+                    { key: 'salary_status', label: '薪资包', render: (row) => salaryBadge(row) },
+                    { key: 'monthly_median', label: '月薪中位（单一来源）', className: 'num', render: (row) => (row.salary_status === 'comparable' ? fmtMoney(row.monthly_median) : '待选定') },
                     { key: 'confidence', label: '置信度', className: 'num', render: (row) => Number(row.confidence).toFixed(3) },
                     { key: 'reason', label: '触发复核', render: (row) => `<span class="cell-sub">${esc(row.reason)}</span>` },
                   ],
@@ -84,6 +91,25 @@ export const reviewsPage = {
         </section>
 
         <div class="side-stack">
+          <section class="panel">
+            ${sectionHead('C', '计数对账', '页面 / 复核 / 导出')}
+            <div class="panel-body">
+              ${
+                reconcile
+                  ? `<div class="ledger">
+                      <div class="row"><span>原始岗位 / 岗位导出行数</span><b>${reconcile.counts.posts_total} / ${reconcile.exports.posts_csv_rows}</b></div>
+                      <div class="row"><span>归并簇 / 归并导出行数</span><b>${reconcile.counts.clusters_total} / ${reconcile.exports.clusters_csv_rows}</b></div>
+                      <div class="row"><span>可比 + 不一致 + 不可比</span><b>${reconcile.counts.salary_comparable} + ${reconcile.counts.salary_inconsistent} + ${reconcile.counts.salary_noncomparable}</b></div>
+                      <div class="row"><span>待复核 + 已复核</span><b>${reconcile.counts.pending_total} + ${reconcile.counts.review_total}</b></div>
+                      <div class="row"><span>复核导出行数</span><b>${reconcile.exports.reviews_csv_rows}</b></div>
+                      <div class="row"><span>对账结论</span><b>${reconcile.balanced ? '<span class="badge ok">一致</span>' : '<span class="badge high">不一致</span>'}</b></div>
+                    </div>`
+                  : '<div class="panel-note">暂无可对账的归并运行。</div>'
+              }
+            </div>
+            <div class="panel-note">页面计数、复核结论与导出清单必须逐项对账一致；任何来源的原始薪资与计算依据都保留在岗位口径 CSV 中。</div>
+          </section>
+
           <section class="panel">
             ${sectionHead('A', '导出发布清单', 'UTF-8 BOM · Excel 直开')}
             <div class="panel-body" style="display:grid;gap:8px">
@@ -137,7 +163,8 @@ export const reviewsPage = {
     view.querySelectorAll('[data-export]').forEach((button) => {
       button.addEventListener('click', async () => {
         try {
-          await api.download(button.dataset.export, button.dataset.file);
+          const runId = reconcile?.run_id;
+          await api.download(button.dataset.export, button.dataset.file, runId ? { run_id: runId } : undefined);
           toast('已开始下载');
         } catch (err) {
           toast(errorMessage(err), 'err');

@@ -162,3 +162,67 @@ EXPERIENCE_ORDER: list[str] = [item.value for item in Experience]
 # 薪资区间的元数据：用于前端下拉与后端校验
 DEGREE_UNKNOWN_LABEL = "未标注"
 EXPERIENCE_UNKNOWN_LABEL = "未标注"
+
+
+class PayPeriod(StrEnum):
+    """薪资计算周期：原值按什么周期计价。"""
+
+    MONTH = "month"
+    YEAR = "year"
+    DAY = "day"
+    UNKNOWN = "unknown"
+
+
+PAY_PERIOD_LABELS: dict[str, str] = {
+    PayPeriod.MONTH.value: "月薪",
+    PayPeriod.YEAR.value: "年薪",
+    PayPeriod.DAY.value: "日薪",
+    PayPeriod.UNKNOWN.value: "未标注",
+}
+
+PAY_PERIOD_ORDER: list[str] = [
+    PayPeriod.MONTH.value,
+    PayPeriod.YEAR.value,
+    PayPeriod.DAY.value,
+    PayPeriod.UNKNOWN.value,
+]
+
+
+class SalaryStatus(StrEnum):
+    """归并后薪资包状态：单一口径可比 / 多来源不一致待复核 / 全部来源不可比。"""
+
+    COMPARABLE = "comparable"
+    INCONSISTENT = "inconsistent"
+    NONCOMPARABLE = "noncomparable"
+
+
+SALARY_STATUS_LABELS: dict[str, str] = {
+    SalaryStatus.COMPARABLE.value: "可比",
+    SalaryStatus.INCONSISTENT.value: "多来源不一致待复核",
+    SalaryStatus.NONCOMPARABLE.value: "全部不可比",
+}
+
+SALARY_STATUS_ORDER: list[str] = [
+    SalaryStatus.COMPARABLE.value,
+    SalaryStatus.INCONSISTENT.value,
+    SalaryStatus.NONCOMPARABLE.value,
+]
+
+
+class VariableScope(StrEnum):
+    """浮动收入的可比范围：无浮动 / 固定收入 / 浮动未量化 / 已量化计入 / 已含浮动无法拆分。"""
+
+    NONE = "none"
+    FIXED_ONLY = "fixed_only"
+    UNQUANTIFIED = "unquantified"
+    QUANTIFIED = "quantified"
+    INCLUDED_UNQUANTIFIED = "included_unquantified"
+
+
+VARIABLE_SCOPE_LABELS: dict[str, str] = {
+    VariableScope.NONE.value: "无浮动收入",
+    VariableScope.FIXED_ONLY.value: "仅固定收入",
+    VariableScope.UNQUANTIFIED.value: "底薪（浮动未量化）",
+    VariableScope.QUANTIFIED.value: "固定 + 已量化浮动",
+    VariableScope.INCLUDED_UNQUANTIFIED.value: "总额（已含浮动，无法拆分）",
+}

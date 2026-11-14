@@ -1,9 +1,9 @@
 import { api } from '../api.js';
 import { ENUMS, can } from '../config.js';
-import { bindFilters, clusterStatusBadge, clusterTable, filterBar, fmtMoney, fmtPct, openClusterDrawer, sectionHead } from '../components.js';
+import { bindFilters, clusterStatusBadge, clusterTable, filterBar, fmtPct, openClusterDrawer, sectionHead } from '../components.js';
 import { emptyState, errorBox, errorMessage, esc, field, fmtTime, kv, toast } from '../ui.js';
 
-const state = { q: '', status: '', multi: '', needsReview: '' };
+const state = { q: '', status: '', multi: '', needsReview: '', salaryStatus: '' };
 
 function runForm(role) {
   if (!can(role, 'run:create')) {
@@ -32,6 +32,7 @@ export const clustersPage = {
           status: state.status,
           multi: state.multi === 'true' ? 'true' : '',
           needs_review: state.needsReview === '' ? '' : state.needsReview,
+          salary_status: state.salaryStatus,
           limit: 60,
         }),
         api.get('/api/runs', { limit: 5 }),
@@ -47,7 +48,11 @@ export const clustersPage = {
     view.innerHTML = `
       <div class="workbench">
         <section class="panel">
-          ${sectionHead('04', '归并结果', `${clusters.total} 个归并簇 · 本次显示 ${clusters.items.length} 个`)}
+          ${sectionHead(
+            '04',
+            '归并结果',
+            `本运行 ${clusters.salary_counts?.run_total ?? clusters.total} 个归并簇 · 可比 ${clusters.salary_counts?.comparable ?? 0} / 待复核 ${clusters.salary_counts?.inconsistent ?? 0} / 不可比 ${clusters.salary_counts?.noncomparable ?? 0}`,
+          )}
           <div class="panel-body">
             ${filterBar({
               fields: [
@@ -68,6 +73,12 @@ export const clustersPage = {
                   ],
                 },
                 {
+                  label: '薪资包',
+                  name: 'salary_status',
+                  value: state.salaryStatus,
+                  options: [{ value: '', label: '全部' }, ...Object.entries(ENUMS.salaryStatus).map(([value, label]) => ({ value, label }))],
+                },
+                {
                   label: '待复核',
                   name: 'needs_review',
                   value: state.needsReview,
@@ -84,7 +95,7 @@ export const clustersPage = {
             })}
           </div>
           ${clusterTable(clusters.items, ctx.user.role)}
-          <div class="panel-note">点击任一行查看成员对照、相似度与复核表单；导出 CSV 的行数 = 当前运行的归并簇数。</div>
+          <div class="panel-note">点击任一行查看薪资包判定、来源差异、成员对照与复核表单；导出 CSV 的行数 = 当前运行的归并簇数。</div>
         </section>
 
         <div class="side-stack">
@@ -117,6 +128,14 @@ export const clustersPage = {
               <div class="row"><span>平均置信度</span><b>${metrics.avg_confidence !== undefined ? Number(metrics.avg_confidence).toFixed(3) : '—'}</b></div>
               <div class="row"><span>不可比占比</span><b>${fmtPct(metrics.noncomparable_rate || 0)}</b></div>
             </div>
+            <div class="dotted"></div>
+            <div class="ledger">
+              <div class="row"><span>薪资包 · 可比</span><b>${clusters.salary_counts?.comparable ?? 0}</b></div>
+              <div class="row"><span>薪资包 · 不一致待复核</span><b>${clusters.salary_counts?.inconsistent ?? 0}</b></div>
+              <div class="row"><span>薪资包 · 全部不可比</span><b>${clusters.salary_counts?.noncomparable ?? 0}</b></div>
+              <div class="row"><span>三档之和 / 本运行簇总数</span><b>${(clusters.salary_counts?.comparable ?? 0) + (clusters.salary_counts?.inconsistent ?? 0) + (clusters.salary_counts?.noncomparable ?? 0)} / ${clusters.salary_counts?.run_total ?? 0}</b></div>
+            </div>
+            <div class="panel-note">每个簇只采用一条来源完整、前后一致的薪资包；来源不一致时进入复核，绝不把不同来源的底薪、提成、发薪月数拼成一个区间。</div>
             <div class="panel-note">分块键 = 公司归一 + 城市 + 薪资档（5000 元一档）；score ≥ 阈值连边，并查集聚类。</div>
           </section>
         </div>
@@ -127,6 +146,7 @@ export const clustersPage = {
       state.status = values.status || '';
       state.multi = values.multi || '';
       state.needsReview = values.needs_review || '';
+      state.salaryStatus = values.salary_status || '';
       render();
     });
     view.querySelectorAll('table.data tbody tr').forEach((row) => {
@@ -136,7 +156,7 @@ export const clustersPage = {
     });
     view.querySelector('#export-clusters')?.addEventListener('click', async () => {
       try {
-        await api.download('/api/exports/clusters.csv', 'jobmerge-clusters.csv');
+        await api.download('/api/exports/clusters.csv', 'jobmerge-clusters.csv', { run_id: clusters.run_id });
         toast('归并清单 CSV 已开始下载');
       } catch (err) {
         toast(errorMessage(err), 'err');

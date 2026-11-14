@@ -10,6 +10,9 @@ ERROR_MESSAGES: dict[str, str] = {
     "CONFLICT": "数据冲突，请刷新后重试",
     "RATE_LIMITED": "请求过于频繁，请稍后再试",
     "INTERNAL": "服务内部错误",
+    "SALARY_NOT_ADOPTABLE": "该簇全部来源不可比，没有可采用的薪资包",
+    "SALARY_SOURCE_UNKNOWN": "所选来源不属于该归并簇",
+    "SALARY_SOURCE_NOT_COMPARABLE": "所选来源自身薪资不可比",
 }
 
 

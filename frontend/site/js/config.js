@@ -68,6 +68,15 @@ export const ENUMS = {
   channelKind: { site: '招聘站点', api: '接口对接', file: '文件导入', manual: '手工登记' },
   degree: { any: '不限', college: '大专', bachelor: '本科', master: '硕士', doctor: '博士' },
   experience: { any: '不限', '1-3': '1-3 年', '3-5': '3-5 年', '5-10': '5-10 年', '10+': '10 年以上' },
+  payPeriod: { month: '月薪', year: '年薪', day: '日薪', unknown: '未标注' },
+  salaryStatus: { comparable: '可比', inconsistent: '多来源不一致待复核', noncomparable: '全部不可比' },
+  variableScope: {
+    none: '无浮动收入',
+    fixed_only: '仅固定收入',
+    unquantified: '底薪（浮动未量化）',
+    quantified: '固定 + 已量化浮动',
+    included_unquantified: '总额（已含浮动，无法拆分）',
+  },
 };
 
 export function can(role, permission) {
@@ -80,6 +89,10 @@ export function statusTone(status) {
 
 export function parseTone(status) {
   return { parsed: 'ok', negotiable: 'warn', unparsed: 'high' }[status] || 'info';
+}
+
+export function salaryTone(status) {
+  return { comparable: 'ok', inconsistent: 'warn', noncomparable: 'high' }[status] || 'info';
 }
 
 export function decisionTone(decision) {

@@ -9,3 +9,10 @@ class ReviewIn(BaseModel):
     cluster_id: int = Field(gt=0)
     decision: Literal["merge", "split", "keep"]
     note: str | None = Field(default=None, max_length=1000)
+
+
+class SalaryAdoptIn(BaseModel):
+    """人工选定一条来源作为归并簇的对外薪资包。"""
+
+    post_id: int = Field(gt=0)
+    note: str | None = Field(default=None, max_length=1000)

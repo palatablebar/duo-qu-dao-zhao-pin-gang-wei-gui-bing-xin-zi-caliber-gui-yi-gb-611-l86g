@@ -9,7 +9,10 @@ from src.constants.enums import (
     DEGREE_LABELS,
     EXPERIENCE_LABELS,
     PARSE_STATUS_LABELS,
+    SALARY_STATUS_LABELS,
+    PAY_PERIOD_LABELS,
     Role,
+    SalaryStatus,
 )
 from src.models.channel import Channel
 from src.models.cluster import Cluster
@@ -21,9 +24,25 @@ from src.utils.errors import AppError
 from src.utils.timeutil import iso_utc
 
 
+def publish_state(cluster: Cluster, review: Review | None = None) -> tuple[bool, str]:
+    """能否对外发布：薪资包必须可比、岗位未过期、复核结论不能是拆分。"""
+    if cluster.salary_status != SalaryStatus.COMPARABLE.value:
+        return False, SALARY_STATUS_LABELS.get(cluster.salary_status, cluster.salary_status)
+    if cluster.status == "expired":
+        return False, "岗位已过期"
+    if cluster.status == "merged":
+        return False, "已拆散待重算"
+    if review is not None and review.decision == "split":
+        return False, "复核结论为拆分"
+    if cluster.needs_review and review is None:
+        return False, "待人工复核"
+    return True, "可对外发布"
+
+
 def serialize(cluster: Cluster, role: str, review: Review | None = None) -> dict:
     viewer = role == Role.VIEWER.value
     company = mask_company(cluster.company_display) if viewer else cluster.company_display
+    publishable, publish_reason = publish_state(cluster, review)
     return {
         "id": cluster.id,
         "run_id": cluster.run_id,
@@ -38,6 +57,20 @@ def serialize(cluster: Cluster, role: str, review: Review | None = None) -> dict
         "salary_high": cluster.salary_high,
         "monthly_median": cluster.monthly_median,
         "salary_basis": cluster.salary_basis,
+        "salary_status": cluster.salary_status or SalaryStatus.NONCOMPARABLE.value,
+        "salary_status_label": SALARY_STATUS_LABELS.get(
+            cluster.salary_status or SalaryStatus.NONCOMPARABLE.value,
+            cluster.salary_status or "",
+        ),
+        "salary_adopted_post_id": cluster.salary_adopted_post_id,
+        "salary_source_count": cluster.salary_source_count or 0,
+        "salary_comparable_sources": cluster.salary_comparable_sources or 0,
+        "salary_noncomparable_sources": cluster.salary_noncomparable_sources or 0,
+        "has_variable": bool(cluster.has_variable),
+        "variable_scope": cluster.variable_scope or "none",
+        "salary_differences": cluster.salary_differences or [],
+        "publishable": publishable,
+        "publish_reason": publish_reason,
         "channels": cluster.channels or [],
         "channel_count": cluster.channel_count,
         "member_count": cluster.member_count,
@@ -80,6 +113,7 @@ def list_clusters(
     q: str | None = None,
     multi_only: bool = False,
     needs_review: bool | None = None,
+    salary_status: str | None = None,
     limit: int = 30,
     offset: int = 0,
 ) -> dict:
@@ -98,6 +132,9 @@ def list_clusters(
     if needs_review is not None:
         stmt = stmt.where(Cluster.needs_review.is_(needs_review))
         count_stmt = count_stmt.where(Cluster.needs_review.is_(needs_review))
+    if salary_status:
+        stmt = stmt.where(Cluster.salary_status == salary_status)
+        count_stmt = count_stmt.where(Cluster.salary_status == salary_status)
     if q:
         like = f"%{q.strip()}%"
         clause = (
@@ -112,13 +149,42 @@ def list_clusters(
         stmt.order_by(Cluster.member_count.desc(), Cluster.id).limit(limit).offset(offset)
     ).all()
     reviews = {review.cluster_id: review for review in db.scalars(select(Review)).all()}
+    by_status = {
+        key: int(count)
+        for key, count in db.execute(
+            select(Cluster.salary_status, func.count())
+            .where(Cluster.run_id == target_run)
+            .group_by(Cluster.salary_status)
+        ).all()
+    } if target_run else {}
+    comparable = by_status.get(SalaryStatus.COMPARABLE.value, 0)
+    inconsistent = by_status.get(SalaryStatus.INCONSISTENT.value, 0)
+    noncomparable = by_status.get(SalaryStatus.NONCOMPARABLE.value, 0)
     return {
         "items": [serialize(row, role, reviews.get(row.id)) for row in rows],
         "total": total,
         "limit": limit,
         "offset": offset,
         "run_id": target_run,
+        # 计数对账：三个薪资状态之和必须等于本运行的簇总数
+        "salary_counts": {
+            "comparable": comparable,
+            "inconsistent": inconsistent,
+            "noncomparable": noncomparable,
+            "run_total": sum(by_status.values()),
+        },
+        "publish_counts": publish_counts(db, target_run),
     }
+
+
+def publish_counts(db: Session, run_id: int | None) -> dict:
+    """一次运行的发布就绪计数，供页面计数对账。"""
+    if run_id is None:
+        return {"publishable": 0, "blocked": 0}
+    rows = db.scalars(select(Cluster).where(Cluster.run_id == run_id)).all()
+    reviews = {review.cluster_id: review for review in db.scalars(select(Review)).all()}
+    publishable = sum(1 for row in rows if publish_state(row, reviews.get(row.id))[0])
+    return {"publishable": publishable, "blocked": len(rows) - publishable}
 
 
 def get_cluster(db: Session, cluster_id: int, role: str) -> dict:
@@ -128,6 +194,34 @@ def get_cluster(db: Session, cluster_id: int, role: str) -> dict:
     review = db.scalar(select(Review).where(Review.cluster_id == cluster.id))
     payload = serialize(cluster, role, review)
     payload["members"] = _members(db, cluster, role)
+    viewer = role == Role.VIEWER.value
+    sources = cluster.salary_sources or []
+    adopted = cluster.salary_adopted or None
+    if viewer:
+        # 客户只读看不到精确公司名：来源清单里的公司字段同样脱敏
+        sources = [dict(row) for row in sources]
+        for row in sources:
+            row["company_raw"] = mask_company(row.get("company_raw") or "")
+        if adopted:
+            adopted = dict(adopted)
+            adopted["company_raw"] = mask_company(adopted.get("company_raw") or "")
+    payload["salary_package"] = {
+        "status": payload["salary_status"],
+        "status_label": payload["salary_status_label"],
+        "adopted": adopted,
+        "sources": sources,
+        "differences": cluster.salary_differences or [],
+        "source_count": payload["salary_source_count"],
+        "comparable_sources": payload["salary_comparable_sources"],
+        "noncomparable_sources": payload["salary_noncomparable_sources"],
+        "low": cluster.salary_low,
+        "high": cluster.salary_high,
+        "median": cluster.monthly_median,
+        "has_variable": payload["has_variable"],
+        "variable_scope": payload["variable_scope"],
+        "run_id": cluster.run_id,
+        "cluster_id": cluster.id,
+    }
     return payload
 
 
@@ -153,10 +247,19 @@ def _members(db: Session, cluster: Cluster, role: str) -> list[dict]:
                 "salary_raw": row.salary_raw,
                 "salary_status": row.salary_status,
                 "salary_status_label": PARSE_STATUS_LABELS.get(row.salary_status, row.salary_status),
+                "salary_period": row.salary_period,
+                "salary_period_label": PAY_PERIOD_LABELS.get(row.salary_period, row.salary_period),
                 "monthly_low": row.monthly_low,
                 "monthly_high": row.monthly_high,
                 "monthly_median": row.monthly_median,
+                "comparable_monthly_low": row.comparable_monthly_low,
+                "comparable_monthly_high": row.comparable_monthly_high,
+                "comparable_monthly_median": row.comparable_monthly_median,
+                "has_variable": row.has_variable,
+                "variable_scope": row.variable_scope,
                 "months": row.months,
+                "salary_package": row.salary_package or {},
+                "is_adopted": row.id == cluster.salary_adopted_post_id,
                 "degree_label": DEGREE_LABELS.get(row.degree, row.degree),
                 "experience_label": EXPERIENCE_LABELS.get(row.experience, row.experience),
                 "published_at": iso_utc(row.published_at),

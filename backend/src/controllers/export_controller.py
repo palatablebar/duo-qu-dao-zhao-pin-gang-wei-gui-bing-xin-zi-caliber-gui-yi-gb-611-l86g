@@ -42,6 +42,16 @@ def posts_csv(db: Session, principal: dict, request: Request) -> Response:
     )
 
 
+def cluster_sources_csv(db: Session, run_id: int | None, principal: dict, request: Request) -> Response:
+    content = export_service.cluster_sources_csv(db, run_id)
+    _audit(db, principal, "export.cluster_sources", "cluster", content, request, run_id)
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers=csv_response_headers("jobmerge-cluster-sources.csv"),
+    )
+
+
 def reviews_csv(db: Session, principal: dict, request: Request) -> Response:
     content = export_service.reviews_csv(db)
     _audit(db, principal, "export.reviews", "review", content, request)

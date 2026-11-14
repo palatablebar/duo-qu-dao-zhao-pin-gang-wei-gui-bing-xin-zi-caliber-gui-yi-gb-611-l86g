@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models import Base
@@ -34,6 +34,15 @@ class Post(Base):
     monthly_median: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     salary_basis: Mapped[str] = mapped_column(Text, default="")
     salary_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # 薪资包：原值、周期、固定/浮动拆分、换算过程（JSON 保留完整算法 A 结果）
+    salary_package: Mapped[dict] = mapped_column(JSON, default=dict)
+    salary_period: Mapped[str] = mapped_column(String(12), default="unknown", index=True)
+    comparable_monthly_low: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comparable_monthly_high: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comparable_monthly_median: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    has_variable: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    variable_scope: Mapped[str] = mapped_column(String(24), default="none", index=True)
 
     degree: Mapped[str] = mapped_column(String(16), default="any")
     experience: Mapped[str] = mapped_column(String(16), default="any")

@@ -44,6 +44,13 @@ def make_post(
         "raw_text": raw_text,
     }
     post.update(derived)
+    post["salary_package"] = derived["salary_package"]
+    post["salary_period"] = derived["salary_period"]
+    post["comparable_monthly_low"] = derived["comparable_monthly_low"]
+    post["comparable_monthly_high"] = derived["comparable_monthly_high"]
+    post["comparable_monthly_median"] = derived["comparable_monthly_median"]
+    post["has_variable"] = derived["has_variable"]
+    post["variable_scope"] = derived["variable_scope"]
     return post
 
 
@@ -128,3 +135,63 @@ def test_deterministic():
         make_post(3, company="鹿鸣智能科技有限公司", title="算法工程师", channel="lagou"),
     ]
     assert dedupe.build_clusters(posts) == dedupe.build_clusters(posts)
+
+
+def test_cluster_salary_package_is_single_source():
+    posts = [
+        make_post(1, company="云雀数智科技有限公司", title="Java开发工程师", salary="10-15K", channel="zhaopin"),
+        make_post(2, company="云雀数智科技有限公司", title="Java 开发工程师（急聘）", salary="月薪10000-15000元", channel="boss"),
+        make_post(3, company="云雀数智科技有限公司", title="Java开发工程师-双休", salary="10-15K", channel="lagou"),
+    ]
+    result = dedupe.build_clusters(posts)
+    cluster = result["clusters"][0]
+    assert cluster["salary_status"] == "comparable"
+    assert (cluster["salary_low"], cluster["salary_high"]) == (10000, 15000)
+    assert cluster["monthly_median"] == 12500
+    assert cluster["salary_adopted_post_id"] in {1, 2, 3}
+    expected = next(post for post in posts if post["id"] == cluster["salary_adopted_post_id"])
+    assert cluster["salary_low"] == expected["comparable_monthly_low"]
+    assert cluster["salary_high"] == expected["comparable_monthly_high"]
+    assert cluster["salary_basis"] == expected["salary_basis"]
+
+
+def test_cluster_does_not_stitch_different_packages():
+    posts = [
+        make_post(1, company="白石数字营销有限公司", title="Java开发工程师", salary="10-15K", channel="zhaopin"),
+        make_post(2, company="白石数字营销有限公司", title="Java开发工程师", salary="10-15K", channel="boss"),
+        make_post(3, company="白石数字营销有限公司", title="Java开发工程师", salary="10-15K·13薪", channel="lagou"),
+    ]
+    result = dedupe.build_clusters(posts)
+    cluster = result["clusters"][0]
+    assert cluster["salary_status"] == "inconsistent"
+    assert cluster["salary_low"] is None and cluster["salary_high"] is None
+    assert cluster["monthly_median"] is None
+    assert cluster["needs_review"] is True
+    assert "薪资包不一致" in cluster["review_reason"]
+    assert len(cluster["salary_sources"]) == 3
+
+
+def test_cluster_all_noncomparable_is_flagged_not_sorted():
+    posts = [
+        make_post(1, company="长风供应链有限公司", title="运营专员", salary="面议", channel="zhaopin"),
+        make_post(2, company="长风供应链有限公司", title="运营专员", salary="面议", channel="boss"),
+    ]
+    result = dedupe.build_clusters(posts)
+    cluster = result["clusters"][0]
+    assert cluster["salary_status"] == "noncomparable"
+    assert cluster["salary_low"] is None
+    assert cluster["monthly_median"] is None
+
+
+def test_metrics_salary_status_counts_add_up():
+    posts = [
+        make_post(1, company="云雀数智科技有限公司", title="Java开发工程师", salary="10-15K"),
+        make_post(2, company="白石数字营销有限公司", title="Java开发工程师", salary="10-15K"),
+        make_post(3, company="白石数字营销有限公司", title="Java开发工程师", salary="10-15K·13薪"),
+        make_post(4, company="长风供应链有限公司", title="运营专员", salary="面议"),
+    ]
+    metrics = dedupe.build_clusters(posts)["metrics"]
+    assert (
+        metrics["salary_comparable"] + metrics["salary_inconsistent"] + metrics["salary_noncomparable"]
+        == metrics["clusters"]
+    )

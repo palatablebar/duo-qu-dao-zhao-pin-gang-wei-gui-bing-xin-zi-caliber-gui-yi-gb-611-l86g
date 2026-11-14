@@ -10,14 +10,17 @@ from src.constants.enums import (
     DEGREE_LABELS,
     EXPERIENCE_LABELS,
     PARSE_STATUS_LABELS,
+    PAY_PERIOD_LABELS,
+    VARIABLE_SCOPE_LABELS,
     Role,
 )
+
+SALARY_STATUSES = ("parsed", "negotiable", "unparsed")
 from src.models.channel import Channel
 from src.models.post import Post
 from src.utils.errors import AppError
 from src.utils.timeutil import iso_utc
 
-SALARY_COMPARABLE = ("parsed",)
 
 
 def mask_company(name: str) -> str:
@@ -63,6 +66,16 @@ def serialize(post: Post, channel: Channel | None, role: str) -> dict:
         "monthly_median": post.monthly_median,
         "salary_basis": post.salary_basis,
         "salary_confidence": round(post.salary_confidence, 2),
+        "salary_period": post.salary_period,
+        "salary_period_label": PAY_PERIOD_LABELS.get(post.salary_period, post.salary_period),
+        "comparable_monthly_low": post.comparable_monthly_low,
+        "comparable_monthly_high": post.comparable_monthly_high,
+        "comparable_monthly_median": post.comparable_monthly_median,
+        "has_variable": post.has_variable,
+        "variable_scope": post.variable_scope,
+        "variable_scope_label": VARIABLE_SCOPE_LABELS.get(post.variable_scope, post.variable_scope),
+        "salary_package": post.salary_package or {},
+        "salary_reason": (post.salary_package or {}).get("reason"),
         "published_at": iso_utc(post.published_at),
         "expire_at": iso_utc(post.expire_at),
         "raw_text": mask_text(post.raw_text, post.company_raw) if viewer else post.raw_text,
@@ -84,6 +97,8 @@ def list_posts(
     channel_id: int | None = None,
     city: str | None = None,
     salary_status: str | None = None,
+    salary_period: str | None = None,
+    variable_scope: str | None = None,
     q: str | None = None,
     limit: int = 30,
     offset: int = 0,
@@ -99,6 +114,12 @@ def list_posts(
     if salary_status:
         stmt = stmt.where(Post.salary_status == salary_status)
         count_stmt = count_stmt.where(Post.salary_status == salary_status)
+    if salary_period:
+        stmt = stmt.where(Post.salary_period == salary_period)
+        count_stmt = count_stmt.where(Post.salary_period == salary_period)
+    if variable_scope:
+        stmt = stmt.where(Post.variable_scope == variable_scope)
+        count_stmt = count_stmt.where(Post.variable_scope == variable_scope)
     if q:
         like = f"%{q.strip()}%"
         clause = (
@@ -132,8 +153,18 @@ def city_options(db: Session, role: str) -> list[str]:
 
 def salary_breakdown(db: Session) -> dict:
     rows = db.execute(select(Post.salary_status, func.count()).group_by(Post.salary_status)).all()
+    counts = {key: int(count) for key, count in rows}
+    total = db.scalar(select(func.count()).select_from(Post)) or 0
+    period_rows = db.execute(select(Post.salary_period, func.count()).group_by(Post.salary_period)).all()
+    variable_rows = db.execute(select(Post.variable_scope, func.count()).group_by(Post.variable_scope)).all()
     return {
-        "parsed": next((int(count) for key, count in rows if key == "parsed"), 0),
-        "negotiable": next((int(count) for key, count in rows if key == "negotiable"), 0),
-        "unparsed": next((int(count) for key, count in rows if key == "unparsed"), 0),
+        "total": total,
+        "parsed": counts.get("parsed", 0),
+        "negotiable": counts.get("negotiable", 0),
+        "unparsed": counts.get("unparsed", 0),
+        "by_period": {key: int(count) for key, count in period_rows},
+        "by_variable_scope": {key: int(count) for key, count in variable_rows},
+        "with_variable": sum(
+            int(count) for key, count in variable_rows if key and key != "none" and key != "fixed_only"
+        ),
     }

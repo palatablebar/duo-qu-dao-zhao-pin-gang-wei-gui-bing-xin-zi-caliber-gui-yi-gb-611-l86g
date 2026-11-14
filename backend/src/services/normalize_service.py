@@ -145,6 +145,14 @@ def enrich_post_fields(
         "salary_basis": parsed["norm_basis"],
         "salary_confidence": parsed["confidence"],
         "salary_reason": parsed["reason"],
+        # 薪资包完整结果：原值、周期、固定/浮动拆分、逐步换算过程
+        "salary_package": parsed,
+        "salary_period": parsed["period"],
+        "comparable_monthly_low": parsed["comparable_monthly_low"],
+        "comparable_monthly_high": parsed["comparable_monthly_high"],
+        "comparable_monthly_median": parsed["comparable_monthly_median"],
+        "has_variable": parsed["has_variable"],
+        "variable_scope": parsed["variable_scope"],
     }
 
 

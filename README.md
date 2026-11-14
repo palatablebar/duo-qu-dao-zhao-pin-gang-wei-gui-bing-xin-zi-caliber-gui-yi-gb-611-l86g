@@ -2,6 +2,10 @@
 
 > 数据工程 · 中型多模块项目。原生 HTML/CSS/JS 前端 + Python FastAPI 后端 + Celery worker + PostgreSQL 16 + Redis，5 个容器一键起。
 >
+> **薪资包口径（本版重点）**：每条来源单独归一成「固定 / 浮动 / 可比月薪 + 换算过程」的薪资包；
+> 归并簇只采用一条完整、前后一致的来源，多个来源不一致时进入复核并列出差异，全部不可比时明确标出；
+> 任何来源的原始薪资与计算依据都保留在 `posts` 与来源明细导出中，页面计数 / 复核结论 / 导出清单三方对账一致。
+>
 > 视觉方向：**报纸分类广告**——墨黑 + 套红 + 米灰纸底，思源宋正文 + 等宽检字；登录页是「取报单」，总览是头版。
 
 ## 1. 场景
@@ -10,14 +14,15 @@
 - **现有工作流**：运营每天从 12 个招聘渠道（各自独立采集器）把岗位拉进 Excel，人工挑重复、手算月薪，再导给检索侧。
 - **三个痛点**：
   1. 同一岗位在 4–6 个渠道重复挂载，检索结果里同一职位刷屏；
-  2. 薪资写法混乱（`8-12K·13薪`、`年薪18万`、`面议`、`4000-6000元/月`），排序不可比；
+  2. 薪资写法混乱（`8-12K·13薪`、`年薪18万`、`300元/天`、`底薪8000+提成`、`面议`），
+     过去把不同来源的底薪、提成、发薪月数拼成一个区间，排序把拼出来的数当真实薪资；
   3. 过期岗位未下线，仍留在发布清单里。
 - **上下游**：各渠道采集器 → **本系统（原始岗位入库 → 归一 → 归并 → 复核 → 发布清单）** → 检索服务 / 客户报表。
 - **一天的工作剧本**（演示数据锚定 2026-11-14）：
   1. 06:00–08:00 四个采集器按 `crawl_cron` 抓取，岗位落到 `posts`；
-  2. 08:20 运营专员打开头版，看到 160 条来稿、薪资不可比 18 条（11.25%）；
+  2. 08:20 运营专员打开头版，看到 160 条来稿、薪资不可比 21 条（13.13%，面议 15 条 + 不可解析 6 条）；
   3. 08:30 在「归并结果」按 0.82 阈值发起归并：160 条 → 118 簇，消重 42 条；
-  4. 08:40 系统标记 12 个簇需要人工确认（13 薪写法差异 / 公司名全称与简称）；
+  4. 08:40 系统标记 12 个簇需要人工确认（8 组 13 薪写法差异、2 组提成/年终奖口径差异、2 组公司名全称与简称）；
   5. 09:00 专员逐个打开簇详情，看成员对照与相似度，合并或拆分；
   6. 09:30 管理员导出 `jobmerge-clusters.csv`（118 行）给检索侧；
   7. 10:00 客户投诉某个岗位名字脱敏后无法核对，管理员去「审计日志」定位导出与复核记录；
@@ -44,11 +49,11 @@
 | # | 模块 | 对应页面 | 后端 services / controller | 主要 API |
 |---|---|---|---|---|
 | ① | 渠道与采集配置 | 渠道与采集 | `channel_service` / `channel_controller` | `GET/POST /api/channels`、`PATCH /api/channels/{id}` |
-| ② | 归一解析（薪资/公司/职位词干） | 原始岗位（+ 口径试算） | `salary_norm`（算法 A）、`normalize_service` / `post_controller`、`salary_controller` | `GET /api/posts`、`GET /api/posts/{id}`、`POST /api/salary/normalize`、`GET /api/salary/samples` |
+| ② | 归一解析（薪资包/公司/职位词干） | 原始岗位（+ 口径试算） | `salary_norm`（算法 A：单条来源薪资包）、`salary_package`（归并侧选包）、`normalize_service` / `post_controller`、`salary_controller` | `GET /api/posts`、`GET /api/posts/{id}`、`POST /api/salary/normalize`、`GET /api/salary/samples`、`GET /api/salary/breakdown` |
 | ③ | 指纹与分块 | 归并结果（分块面板） | `dedupe`（算法 B 的 blocking）、`merge_service` / `run_controller` | `POST /api/runs`、`GET /api/runs`、`GET /api/runs/{id}` |
 | ④ | 相似度归并（golden record） | 归并结果 | `dedupe.build_clusters`、`merge_service`、`cluster_service` / `cluster_controller` | `GET /api/clusters`、`GET /api/clusters/{id}` |
-| ⑤ | 人工复核（合并 / 拆分 / 保持） | 复核与导出 | `review_service` / `review_controller` | `GET /api/reviews/pending`、`GET /api/reviews`、`POST /api/reviews` |
-| ⑥ | 结果导出与审计 | 复核与导出（导出面板 + 审计） | `export_service`、`audit_service` / `export_controller`、`audit` 路由 | `GET /api/exports/{clusters,posts,reviews,runs}.csv`、`GET /api/audit` |
+| ⑤ | 人工复核（合并 / 拆分 / 保持 + 选定薪资来源） | 复核与导出 | `review_service` / `review_controller`、`salary_review_service` | `GET /api/reviews/pending`、`GET /api/reviews`、`POST /api/reviews`、`POST /api/clusters/{id}/salary` |
+| ⑥ | 结果导出、对账与审计 | 复核与导出（导出面板 + 对账 + 审计） | `export_service`、`reconcile` / `reconcile_service`、`audit_service` / `export_controller`、`audit` 路由 | `GET /api/exports/{clusters,cluster-sources,posts,reviews,runs}.csv`、`GET /api/clusters/reconcile`、`GET /api/audit` |
 
 > 登录（`auth_service`）、总览（`overview_service`）、限流与审计中间件属于横切能力，不计入业务模块。
 
@@ -59,9 +64,9 @@
 | 1 | `#/login` | 登录 · 取报单 | 报头 + 双栏导语 + 虚线取报单表单 |
 | 2 | `#/overview` | 头版总览 | 头条综述、四个报眼数字、薪资口径分布、渠道来稿量、近 7 日归并、最新运行、成员最多簇 |
 | 3 | `#/channels` | 渠道与采集 | 过滤条 + 检字表（采集计划/已入库/最近采集）+ 详情抽屉 + 登记渠道 |
-| 4 | `#/posts` | 原始岗位 | 薪资原值 vs 归一值对照表 + 岗位详情抽屉 + **算法 A 口径试算** |
-| 5 | `#/clusters` | 归并结果 | 归并簇表 + 成员对照抽屉（相似度/golden）+ 发起归并（阈值）+ 导出 |
-| 6 | `#/reviews` | 复核与导出 | 待复核队列 + 复核历史 + 4 个 CSV 导出 + 审计日志（仅 admin） |
+| 4 | `#/posts` | 原始岗位 | 薪资原值 / 周期 / 固定月薪 / 浮动 / 可比中位对照 + 岗位详情（换算过程）+ **算法 A 口径试算** + 周期与浮动筛选 |
+| 5 | `#/clusters` | 归并结果 | 归并簇表（薪资包状态 + 可否对外发布）+ 成员对照抽屉（每条来源独立折算、差异清单、选定来源）+ 发起归并（阈值）+ 导出 |
+| 6 | `#/reviews` | 复核与导出 | 待复核队列 + 计数对账面板 + 复核历史 + 5 个 CSV 导出 + 审计日志（仅 admin） |
 
 共用组件：`frontend/site/js/ui.js`（`table` / `drawer` / `field` / `badge` / `barList` / `trendChart`）与
 `frontend/site/js/components.js`（`filterBar` / `clusterTable` / `openClusterDrawer` / `salaryRange`），
@@ -110,7 +115,10 @@ backend/
   src/models/{user,channel,post,cluster,run,review,audit}.py
   src/schemas/{auth,channel,cluster,run,salary,common}.py
   src/services/
-    salary_norm.py       # 算法 A：薪资口径归一（纯函数）
+    salary_norm.py       # 算法 A：单条来源 → 薪资包（纯函数）
+    salary_package.py    # 算法 A 归并侧：从多条来源选出一条完整一致的薪资包（纯函数）
+    salary_review_service.py # 人工选定来源作为对外薪资包
+    reconcile.py / reconcile_service.py # 页面 / 复核 / 导出三方对账
     normalize_service.py # 公司名 / 职位词干 / 城市 / 学历经验归一
     dedupe.py            # 算法 B：分块 + 相似度 + 并查集聚类
     merge_service.py     # 归并运行落库
@@ -130,28 +138,57 @@ frontend/site/{index.html,css/{tokens,app}.css,js/{api,app,config,store,ui,compo
 
 ### 算法 A｜薪资口径归一（`backend/src/services/salary_norm.py`）
 
-输入一条薪资原值，输出 `(salary_low, salary_high, months)`、`monthly_low/high/median`、`confidence`、`norm_basis`。
+输入一条薪资原值，输出一个**薪资包**（不再只折出一个数）：
 
-1. 字符归一：NFKC 全角→半角，`～ ~ — – 至` → `-`，去空白；
-2. `N薪` 提取发薪月数 `months`（缺省 12，合法 12–24）；
-3. `面议 / 面谈 / 详谈 / 待定 / 保密 / 另议` → `status=negotiable`，`monthly_median=None`，`confidence=0.2`；
-4. 金额单位：`k/千`=1000、`万/w`=10000；`8-12k` 这种只在后一个数字标单位时向左继承；
-5. `年薪 / 年包`：先得年薪总额，再 ÷ 12 得月薪；
-6. 月薪口径：`monthly_low = 名义下限 × 12 ÷ months`、`monthly_high = 名义上限 × 12 ÷ months`、
-   `monthly_median = 区间中位 × 12 ÷ months`（四舍五入到元）；
-7. 非法（空值 / 无金额 / 折月量级超出 500–500000）与矛盾（`low > high`）→ `status=unparsed`，
-   进 `unparsed` 列表并计入 `fail_rate`；`noncomparable_rate = (unparsed + negotiable) / total`。
+- `status`：`parsed / negotiable / unparsed`；
+- `period`：`month / year / day`（月薪缺省；`年薪 / 年包 / /年` → 年薪；`日薪 / 元/天 / /天` → 日薪）；
+- `months / months_explicit`：发薪月数 `N薪`（缺省 12，合法 12–24），并标明是否原值明确写出；
+- `quoted_low/high`：原值区间（换算前），任何情况下都原样保留；
+- `fixed_monthly_low/high`：固定收入（底薪 / 基本工资 / 固定工资）折月；
+- `variable_items`：提成 / 津贴 / 奖金 / 绩效等浮动项目，含原值、周期、是否量化；
+- `variable_monthly_low/high`：**只有量化得出来**的浮动收入才折月，算不出来的只打标；
+- `total_monthly_low/high`：固定 + 已量化浮动；
+- `comparable_monthly_low/high/median`：用于排序的单一可比口径（有总额取总额，否则取固定）；
+- `has_variable / variable_scope`：是否含浮动，以及浮动是可比的哪一档；
+- `basis_steps / norm_basis`：逐步换算过程（字符归一 → 发薪月数 → 周期 → 折月 → 浮动 → 可比口径）。
+
+换算规则：
+
+1. 字符归一：NFKC 全角→半角，`～ ~ — – 至` → `-`，统一逗号、去多余空白；
+2. 月薪：`名义区间 × 12 ÷ months`；年薪：`÷ 12`；日薪：`× 21.75`（法定月平均工作日）；
+3. 同一原值同时出现年薪与日薪 → `unparsed`（周期矛盾）；`low > high` → `unparsed`（区间矛盾）；
+4. 折月后超出 500–500000 或识别不出金额 → `unparsed`；面议 → `negotiable`；
+5. **绝不跨来源拼区间、绝不把提成或年终奖塞进底薪**：浮动金额单独放在 `variable_*`，并标注是否量化；
+6. 原值、原值区间、发薪月数、每一步换算都进 `salary_package`（JSON 落库），导出时原样带出。
 
 验收样例（与 `/api/salary/normalize` 返回一致）：
 
-| 原值 | 名义月薪 | 归一后月薪 | 中位 | status |
-|---|---|---|---|---|
-| `8-12K·13薪` | 8000–12000 | 7385–11077 | **9231** | parsed |
-| `年薪18万` | 15000–15000 | 15000–15000 | **15000** | parsed |
-| `4000-6000元/月` | 4000–6000 | 4000–6000 | 5000 | parsed |
-| `15-25K·14薪` | 15000–25000 | 12857–21429 | 17143 | parsed |
-| `面议` | — | — | `null` | negotiable |
-| `12-8K` | — | — | `null` | unparsed（区间矛盾） |
+| 原值 | 周期 | 固定月薪 | 浮动口径 | 可比月薪中位 | status |
+|---|---|---|---|---|---|
+| `8-12K·13薪` | 月薪 · 13 薪 | 7385–11077 | 无浮动 | **9231** | parsed |
+| `年薪18万` | 年薪 | 15000–15000 | 无浮动 | **15000** | parsed |
+| `300元/天` | 日薪 | 6525–6525 | 无浮动 | **6525** | parsed |
+| `底薪8000+提成` | 月薪 | 8000–8000 | 提成未量化，不计数 | **8000** | parsed |
+| `月薪8000-10000+年终奖2万` | 月薪 | 8000–10000 | 年终奖 20000÷12=1667 已量化 | **10667** | parsed |
+| `综合月薪8000-10000（含提成）` | 月薪 | 不可拆分 | 总额已含浮动 | **9000** | parsed |
+| `面议` | — | — | — | `null` | negotiable |
+| `12-8K` | — | — | — | `null` | unparsed（区间矛盾） |
+| `年薪18万+300元/天` | — | — | — | `null` | unparsed（周期矛盾） |
+
+### 算法 A 归并侧｜归并簇的薪资包选择（`backend/src/services/salary_package.py`）
+
+1. 每条来源独立归一，形成自己的薪资包；**不做 min/max、不做区间并集**；
+2. 只有 `parsed` 且折月区间完整的来源才是候选；
+3. 候选之间比较「薪资包签名」：发薪月数 + 固定月薪区间 + 浮动口径 + 含浮动月薪区间；
+   签名一致 = 同一薪资包（`10-15K` 与 `月薪10000-15000元`、`年薪18万` 与 `15K` 等价）；
+4. 一致时只采用**一条**来源（浮动更量化 → 月数/区间显式 → 置信度高 → 发布新 → id 小），
+   其余来源仍保留原值与换算过程；
+5. 不一致（月数不同、提成/底薪口径不同、部分来源面议或不可解析）→ `inconsistent`：
+   不输出对外薪资，进入人工复核，`salary_differences` 列出每种口径与涉及渠道；
+6. 全部来源不可比 → `noncomparable`：明确标注，不参与排序与发布。
+
+簇的 `salary_low/high/monthly_median/salary_basis` 只来自被采用的那一条来源；
+`publishable` 由「薪资包可比 + 未过期 + 未被拆分 + 已复核」共同决定。
 
 ### 算法 B｜重复岗归并（`backend/src/services/dedupe.py`）
 
@@ -165,10 +202,26 @@ frontend/site/{index.html,css/{tokens,app}.css,js/{api,app,config,store,ui,compo
    - `attr_match`：学历与经验各占 0.5，相等 = 1.0，任一方「不限」= 0.7
 4. `score >= threshold`（默认 0.82）连边，并查集聚类；
 5. golden record = 「字段最全 → 发布最新 → id 最小」；簇置信度 = 簇内两两相似度均值；
-6. 输出 `member_count`、`dup_removed`、`confidence`、`needs_review`（簇内发薪月数或公司写法不一致时为 true）。
+6. 输出 `member_count`、`dup_removed`、`confidence`、`needs_review`
+   （薪资包不一致或公司写法不一致时为 true；全部来源不可比只标注、不占复核队列）；
+7. 薪资包选择见上一节，`blocking_key` 与 `salary_overlap` 使用每条来源自己的可比月薪。
 
 seed 数据实算：160 条原始岗位 → **118 簇**（21 个多成员簇、最大 3 条、消重 **42** 条），
-其中 21 个多成员簇里有 12 个被标记为待人工复核，8 个簇因过期下线。
+其中 12 个多成员簇被标记为待人工复核，8 个簇因过期下线。
+
+同一次运行的薪资包对账（页面、复核、导出必须一致）：
+
+| 指标 | 数量 |
+|---|---|
+| 归并簇 | 118 |
+| 薪资包可比（单来源采用） | 89 |
+| 多来源不一致待复核 | 10 |
+| 全部来源不可比 | 19 |
+| 三者之和 | 118 |
+| 待复核簇 / 已复核 / 待复核队列 | 12 / 3 / 9 |
+
+`GET /api/clusters/reconcile` 会把「薪资包三档之和 = 簇总数、导出行数 = 簇总数、
+待复核 + 已复核 = 待复核标记数、来源明细覆盖全部成员、可比簇各采用一条来源」逐项核对并返回 `balanced`。
 
 ## 11. 共享枚举出现位置
 
@@ -176,6 +229,9 @@ seed 数据实算：160 条原始岗位 → **118 簇**（21 个多成员簇、�
 |---|---|---|
 | 角色 `admin/analyst/viewer` | `backend/src/constants/enums.py`、`constants/roles.py` | `frontend/site/js/config.js`（`ROLE_LABELS` / `PERMISSIONS`） |
 | 薪资口径状态 `parsed/negotiable/unparsed` | `constants/enums.py`（`ParseStatus`） | `config.js`（`ENUMS.parseStatus`、`parseTone`） |
+| 计价周期 `month/year/day` | `constants/enums.py`（`PayPeriod`） | `config.js`（`ENUMS.payPeriod`） |
+| 簇薪资包状态 `comparable/inconsistent/noncomparable` | `constants/enums.py`（`SalaryStatus`） | `config.js`（`ENUMS.salaryStatus`、`salaryTone`） |
+| 浮动口径 `none/fixed_only/unquantified/quantified/included_unquantified` | `constants/enums.py`（`VariableScope`） | `config.js`（`ENUMS.variableScope`） |
 | 归并簇状态 `active/expired/merged` | `constants/enums.py`（`ClusterStatus`） | `config.js`（`ENUMS.clusterStatus`、`statusTone`） |
 | 复核结论 `merge/split/keep` | `constants/enums.py`（`ReviewDecision`） | `config.js`（`ENUMS.decision`、`decisionTone`） |
 | 运行状态 `queued/running/success/partial/failed` | `constants/enums.py`（`RunStatus`） | `config.js`（`ENUMS.runStatus`） |
@@ -194,6 +250,13 @@ seed 数据实算：160 条原始岗位 → **118 簇**（21 个多成员簇、�
 ## 13. 已知简化
 
 见 `test-artifacts/gb-611/TESTING.md`「已知差异」：字符集 Jaccard 代替分词、单个簇只保留一条有效复核结论、渠道采集以 seed 数据模拟（未接真实爬虫）。
+
+薪资包口径的已知简化：
+
+- 日薪统一按 21.75 个工作日/月折月（不区分大小月与加班）；
+- 提成只识别百分比/固定金额，「按业绩比例、无基数」不折算，只打标；
+- 年终奖若原值未写周期，按「按年」处理；未写金额的年终奖不计数；
+- `needs_review` 仍由公司名写法与薪资包不一致共同触发；全部来源不可比的簇只标注、不进复核队列。
 
 ## License
 

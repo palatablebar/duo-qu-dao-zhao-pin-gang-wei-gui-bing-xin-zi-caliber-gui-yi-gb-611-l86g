@@ -4,7 +4,12 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from src.constants.enums import CLUSTER_STATUS_LABELS, REVIEW_DECISION_LABELS, ReviewDecision
+from src.constants.enums import (
+    CLUSTER_STATUS_LABELS,
+    REVIEW_DECISION_LABELS,
+    SALARY_STATUS_LABELS,
+    ReviewDecision,
+)
 from src.models.cluster import Cluster
 from src.models.review import Review
 from src.utils.errors import AppError, not_found
@@ -30,6 +35,8 @@ def serialize(review: Review, cluster: Cluster | None = None) -> dict:
             "city": cluster.city,
             "member_count": cluster.member_count,
             "monthly_median": cluster.monthly_median,
+            "salary_status": cluster.salary_status,
+            "salary_status_label": SALARY_STATUS_LABELS.get(cluster.salary_status, cluster.salary_status),
             "status": cluster.status,
             "status_label": CLUSTER_STATUS_LABELS.get(cluster.status, cluster.status),
         }
@@ -84,6 +91,12 @@ def _pending_row(cluster: Cluster) -> dict:
         "channel_count": cluster.channel_count,
         "salary_basis": cluster.salary_basis,
         "monthly_median": cluster.monthly_median,
+        "salary_status": cluster.salary_status,
+        "salary_status_label": SALARY_STATUS_LABELS.get(cluster.salary_status, cluster.salary_status),
+        "salary_source_count": cluster.salary_source_count or 0,
+        "salary_comparable_sources": cluster.salary_comparable_sources or 0,
+        "salary_noncomparable_sources": cluster.salary_noncomparable_sources or 0,
+        "salary_differences": cluster.salary_differences or [],
         "confidence": round(cluster.confidence, 3),
         "status": cluster.status,
         "status_label": CLUSTER_STATUS_LABELS.get(cluster.status, cluster.status),
@@ -92,7 +105,9 @@ def _pending_row(cluster: Cluster) -> dict:
 
 
 def _reason(cluster: Cluster) -> str:
-    """兜底文案：老数据没有 review_reason 时按成员数说明。"""
+    """兜底文案：老数据没有 review_reason 时按薪资包结论与成员数说明。"""
+    if cluster.salary_status == "inconsistent":
+        return "来源薪资包不一致，需人工确认采用哪一条口径"
     if cluster.member_count > 1:
         return f"{cluster.member_count} 条来自不同渠道，写法不一致"
     return "算法标记待人工确认"

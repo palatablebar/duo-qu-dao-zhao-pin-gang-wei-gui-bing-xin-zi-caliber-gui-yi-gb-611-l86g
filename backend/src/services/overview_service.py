@@ -12,6 +12,7 @@ from src.constants.enums import (
     CLUSTER_STATUS_LABELS,
     PARSE_STATUS_LABELS,
     PARSE_STATUS_ORDER,
+    SALARY_STATUS_LABELS,
     Role,
 )
 from src.models.channel import Channel
@@ -64,6 +65,11 @@ def overview(db: Session, role: str) -> dict:
     salary_counts = {key: int(count) for key, count in salary_rows}
     negotiable = salary_counts.get("negotiable", 0)
     unparsed = salary_counts.get("unparsed", 0)
+    with_variable = db.scalar(select(func.count()).select_from(Post).where(Post.has_variable.is_(True))) or 0
+    period_rows = db.execute(
+        select(Post.salary_period, func.count()).group_by(Post.salary_period)
+    ).all()
+    period_counts = {key: int(count) for key, count in period_rows}
 
     latest = run_service.latest_run(db)
     counts = run_service.cluster_counts(db, latest.id if latest else None)
@@ -86,6 +92,24 @@ def overview(db: Session, role: str) -> dict:
         else []
     )
 
+    # 薪资包三档直接查库：人工选定来源后簇状态会变，不能只信运行时的 metrics
+    package_rows = (
+        db.execute(
+            select(Cluster.salary_status, func.count())
+            .where(Cluster.run_id == latest.id)
+            .group_by(Cluster.salary_status)
+        ).all()
+        if latest
+        else []
+    )
+    package_by_status = {key: int(count) for key, count in package_rows}
+    salary_package_counts = {
+        "comparable": package_by_status.get("comparable", 0),
+        "inconsistent": package_by_status.get("inconsistent", 0),
+        "noncomparable": package_by_status.get("noncomparable", 0),
+        "total": sum(package_by_status.values()),
+    }
+
     top_clusters = []
     if latest:
         viewer = role == Role.VIEWER.value
@@ -104,6 +128,9 @@ def overview(db: Session, role: str) -> dict:
                 "member_count": row.member_count,
                 "channel_count": row.channel_count,
                 "monthly_median": row.monthly_median,
+                "salary_status": row.salary_status,
+                "salary_status_label": SALARY_STATUS_LABELS.get(row.salary_status, row.salary_status),
+                "has_variable": bool(row.has_variable),
                 "confidence": round(row.confidence, 3),
                 "status_label": CLUSTER_STATUS_LABELS.get(row.status, row.status),
             }
@@ -129,6 +156,8 @@ def overview(db: Session, role: str) -> dict:
             "unparsed": unparsed,
             "noncomparable_rate": round((negotiable + unparsed) / posts_total, 4) if posts_total else 0.0,
             "fail_rate": round(unparsed / posts_total, 4) if posts_total else 0.0,
+            "with_variable": int(with_variable),
+            "by_period": period_counts,
         },
         "worker_alive": worker_alive(),
         "latest_run": {
@@ -142,6 +171,9 @@ def overview(db: Session, role: str) -> dict:
             "started_at": iso_utc(latest.started_at),
             "finished_at": iso_utc(latest.finished_at),
             "metrics": latest.metrics or {},
+            "salary_comparable": (latest.metrics or {}).get("salary_comparable", 0),
+            "salary_inconsistent": (latest.metrics or {}).get("salary_inconsistent", 0),
+            "salary_noncomparable": (latest.metrics or {}).get("salary_noncomparable", 0),
         }
         if latest
         else None,
@@ -161,5 +193,6 @@ def overview(db: Session, role: str) -> dict:
             for key, count in status_rows
         ],
         "top_clusters": top_clusters,
+        "salary_package_counts": salary_package_counts,
         "trend": _trend(db),
     }

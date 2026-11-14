@@ -34,9 +34,18 @@ def _payload(post: Post, channel: Channel) -> dict:
         "title_stem": post.title_stem,
         "city": post.city,
         "salary_raw": post.salary_raw,
+        "salary_status": post.salary_status,
+        "salary_reason": (post.salary_package or {}).get("reason"),
+        "salary_package": post.salary_package,
+        "salary_period": post.salary_period,
         "monthly_low": post.monthly_low,
         "monthly_high": post.monthly_high,
         "monthly_median": post.monthly_median,
+        "comparable_monthly_low": post.comparable_monthly_low,
+        "comparable_monthly_high": post.comparable_monthly_high,
+        "comparable_monthly_median": post.comparable_monthly_median,
+        "has_variable": post.has_variable,
+        "variable_scope": post.variable_scope,
         "months": post.months,
         "degree": post.degree,
         "experience": post.experience,
@@ -57,6 +66,16 @@ CLUSTER_FIELDS = (
     "salary_high",
     "monthly_median",
     "salary_basis",
+    "salary_status",
+    "salary_adopted_post_id",
+    "salary_source_count",
+    "salary_comparable_sources",
+    "salary_noncomparable_sources",
+    "has_variable",
+    "variable_scope",
+    "salary_sources",
+    "salary_differences",
+    "salary_adopted",
     "member_ids",
     "channels",
     "channel_count",
@@ -98,6 +117,7 @@ def execute_merge(db: Session, run: Run) -> dict:
     parsed = sum(1 for post, _ in rows if post.salary_status == "parsed")
     negotiable = sum(1 for post, _ in rows if post.salary_status == "negotiable")
     unparsed_posts = [post for post, _ in rows if post.salary_status == "unparsed"]
+    variable_posts = sum(1 for post, _ in rows if post.has_variable)
     total = len(rows)
     channel_codes = sorted({channel.code for _, channel in rows})
 
@@ -108,6 +128,7 @@ def execute_merge(db: Session, run: Run) -> dict:
         "parsed": parsed,
         "negotiable": negotiable,
         "unparsed": len(unparsed_posts),
+        "with_variable": variable_posts,
         "parse_fail_rate": round(len(unparsed_posts) / total, 4) if total else 0.0,
         "noncomparable_rate": round((negotiable + len(unparsed_posts)) / total, 4) if total else 0.0,
         "blocks": result["metrics"]["blocks"],
@@ -119,6 +140,9 @@ def execute_merge(db: Session, run: Run) -> dict:
         "largest_cluster": result["metrics"]["largest_cluster"],
         "needs_review": result["metrics"]["needs_review"],
         "expired_clusters": result["metrics"]["expired_clusters"],
+        "salary_comparable": result["metrics"]["salary_comparable"],
+        "salary_inconsistent": result["metrics"]["salary_inconsistent"],
+        "salary_noncomparable": result["metrics"]["salary_noncomparable"],
         "threshold": run.threshold,
         "avg_confidence": round(
             sum(item["confidence"] for item in clusters) / len(clusters), 4
@@ -138,6 +162,8 @@ def execute_merge(db: Session, run: Run) -> dict:
         f"分块 {metrics['blocks']} 个，两两比较 {metrics['pairs']} 对，连边 {metrics['edges']} 条",
         f"输出 {metrics['clusters']} 簇（多成员 {metrics['multi_clusters']} 簇，最大 {metrics['largest_cluster']} 条），"
         f"消重 {metrics['dupes_removed']} 条",
+        f"薪资包：可比 {metrics['salary_comparable']} 簇 / 不一致待复核 {metrics['salary_inconsistent']} 簇 / "
+        f"全部不可比 {metrics['salary_noncomparable']} 簇",
         f"待人工复核 {metrics['needs_review']} 簇，已过期 {metrics['expired_clusters']} 簇",
     ]
     status = "success" if total and clusters else "partial"

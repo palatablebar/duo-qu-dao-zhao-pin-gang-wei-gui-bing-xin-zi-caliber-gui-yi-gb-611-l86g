@@ -23,9 +23,20 @@ def normalize(payload: dict, principal: dict, request: Request, db: Session) -> 
     return result
 
 
+SAMPLE_RAWS = [
+    "8-12K·13薪",
+    "年薪18万",
+    "4000-6000元/月",
+    "300元/天",
+    "底薪8000+提成",
+    "月薪8000-10000+年终奖2万",
+    "面议",
+    "12-8K",
+]
+
+
 def samples() -> dict:
-    raws = ["8-12K·13薪", "年薪18万", "4000-6000元/月", "面议", "12-8K", "６千-９千/月"]
-    return {"items": [salary_norm.parse_salary(raw) for raw in raws]}
+    return {"items": [salary_norm.parse_salary(raw) for raw in SAMPLE_RAWS]}
 
 
 def salary_breakdown(db: Session) -> dict:

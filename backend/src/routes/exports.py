@@ -21,6 +21,16 @@ def clusters_csv(
     return export_controller.clusters_csv(db, run_id, principal, request)
 
 
+@router.get("/cluster-sources.csv")
+def cluster_sources_csv(
+    request: Request,
+    run_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_roles(*EXPORT_ROLES)),
+):
+    return export_controller.cluster_sources_csv(db, run_id, principal, request)
+
+
 @router.get("/posts.csv")
 def posts_csv(
     request: Request,

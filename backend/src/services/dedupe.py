@@ -14,6 +14,8 @@ import hashlib
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 
+from src.constants.enums import SalaryStatus
+from src.services import salary_package
 from src.services.normalize_service import (
     normalize_city,
     normalize_company,
@@ -33,7 +35,11 @@ def salary_bucket(monthly_median: int | None) -> str:
 
 
 def blocking_key(post: dict) -> str:
-    return f"{post['company_norm']}|{post['city']}|{salary_bucket(post.get('monthly_median'))}"
+    # 分块用每条来源自己的可比月薪（固定+已量化浮动），缺失时退回固定月薪
+    median = post.get("comparable_monthly_median")
+    if median is None:
+        median = post.get("monthly_median")
+    return f"{post['company_norm']}|{post['city']}|{salary_bucket(median)}"
 
 
 def jaccard(left: set[str], right: set[str]) -> float:
@@ -55,8 +61,12 @@ def company_similarity(left: str, right: str) -> float:
 
 
 def salary_overlap(left: dict, right: dict) -> float:
-    l_low, l_high = left.get("monthly_low"), left.get("monthly_high")
-    r_low, r_high = right.get("monthly_low"), right.get("monthly_high")
+    l_low, l_high = left.get("comparable_monthly_low"), left.get("comparable_monthly_high")
+    r_low, r_high = right.get("comparable_monthly_low"), right.get("comparable_monthly_high")
+    if l_low is None or l_high is None:
+        l_low, l_high = left.get("monthly_low"), left.get("monthly_high")
+    if r_low is None or r_high is None:
+        r_low, r_high = right.get("monthly_low"), right.get("monthly_high")
     l_known = l_low is not None and l_high is not None
     r_known = r_low is not None and r_high is not None
     if not l_known and not r_known:
@@ -115,6 +125,13 @@ def _prepare(post: dict) -> dict:
     prepared.setdefault("monthly_high", None)
     prepared.setdefault("monthly_median", None)
     prepared.setdefault("months", 12)
+    prepared.setdefault("salary_package", None)
+    prepared.setdefault("salary_period", "unknown")
+    prepared.setdefault("comparable_monthly_low", None)
+    prepared.setdefault("comparable_monthly_high", None)
+    prepared.setdefault("comparable_monthly_median", None)
+    prepared.setdefault("has_variable", False)
+    prepared.setdefault("variable_scope", "none")
     return prepared
 
 
@@ -219,24 +236,21 @@ def build_clusters(posts: list[dict], threshold: float = DEFAULT_THRESHOLD, now:
                 if score is not None:
                     scores.append(score)
 
-        medians = [item["monthly_median"] for item in members if item.get("monthly_median") is not None]
-        lows = [item["monthly_low"] for item in members if item.get("monthly_low") is not None]
-        highs = [item["monthly_high"] for item in members if item.get("monthly_high") is not None]
-        months = {item.get("months", 12) for item in members}
-        company_raws = {item.get("company_raw", "") for item in members}
-        variants = {item.get("salary_raw", "") for item in members}
+        # 薪资包：只采用一条完整、前后一致的来源；不一致/全不可比时明确标出
+        package = salary_package.select_package(members)
+        adopted = package["adopted"]
+        salary_status = package["status"]
 
-        # 只有「发薪月数」或「公司名写法」不一致才需要人工确认；
-        # 同一区间换写法（如 10-15K / 月薪10000-15000元）算法已确定等价，不进复核队列。
-        needs_review = len(members) > 1 and (len(months) > 1 or len(company_raws) > 1)
+        company_raws = {item.get("company_raw", "") for item in members}
+
         reasons: list[str] = []
+        if salary_status == SalaryStatus.INCONSISTENT.value:
+            reasons.append(package["reason"] or "多来源薪资包不一致")
         if len(company_raws) > 1:
             reasons.append("公司名写法不一致")
-        if len(months) > 1:
-            reasons.append("含不同发薪月数写法")
-        if needs_review and len(variants) > 1:
-            reasons.append(f"{len(variants)} 种薪资写法")
-        review_reason = "；".join(reasons) if needs_review else ""
+        # 全部来源不可比只做明确标注，不占用人工复核队列；需要的是对外发布时跳过
+        needs_review = len(members) > 1 and bool(reasons)
+        review_reason = "；".join(part for part in reasons if part)
 
         clusters.append(
             {
@@ -247,10 +261,21 @@ def build_clusters(posts: list[dict], threshold: float = DEFAULT_THRESHOLD, now:
                 "title_stem": members[0]["title_stem"],
                 "title_display": golden.get("title_raw") or members[0]["title_stem"],
                 "city": members[0]["city"],
-                "salary_low": min(lows) if lows else None,
-                "salary_high": max(highs) if highs else None,
-                "monthly_median": sorted(medians)[len(medians) // 2] if medians else None,
-                "salary_basis": " / ".join(sorted(variants)[:3]),
+                # 只取采用来源的区间，绝不 min/max 跨来源拼接
+                "salary_low": package["low"],
+                "salary_high": package["high"],
+                "monthly_median": package["median"],
+                "salary_basis": salary_package.adopted_basis(adopted) if adopted else "",
+                "salary_status": salary_status,
+                "salary_adopted_post_id": adopted["post_id"] if adopted else None,
+                "salary_source_count": package["source_count"],
+                "salary_comparable_sources": package["comparable_sources"],
+                "salary_noncomparable_sources": package["noncomparable_sources"],
+                "has_variable": package["has_variable"],
+                "variable_scope": package["variable_scope"],
+                "salary_sources": package["sources"],
+                "salary_differences": package["differences"],
+                "salary_adopted": adopted or {},
                 "channels": sorted({str(item.get("channel_code") or item.get("channel_id")) for item in members}),
                 "channel_count": len({str(item.get("channel_code") or item.get("channel_id")) for item in members}),
                 "member_count": len(members),
@@ -284,6 +309,9 @@ def build_clusters(posts: list[dict], threshold: float = DEFAULT_THRESHOLD, now:
         "largest_cluster": max((item["member_count"] for item in clusters), default=0),
         "needs_review": sum(1 for item in clusters if item["needs_review"]),
         "expired_clusters": sum(1 for item in clusters if item["status"] == "expired"),
+        "salary_comparable": sum(1 for item in clusters if item["salary_status"] == SalaryStatus.COMPARABLE.value),
+        "salary_inconsistent": sum(1 for item in clusters if item["salary_status"] == SalaryStatus.INCONSISTENT.value),
+        "salary_noncomparable": sum(1 for item in clusters if item["salary_status"] == SalaryStatus.NONCOMPARABLE.value),
         "threshold": threshold,
     }
     return {"clusters": clusters, "metrics": metrics}

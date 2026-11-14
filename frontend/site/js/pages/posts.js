@@ -1,20 +1,29 @@
 import { api } from '../api.js';
 import { ENUMS, can } from '../config.js';
-import { bindFilters, filterBar, fmtMoney, fmtPct, parseBadge, salaryRange, sectionHead } from '../components.js';
+import { bindFilters, filterBar, fmtMoney, parseBadge, salaryRange, sectionHead, variableScopeText } from '../components.js';
 import { drawer, emptyState, errorBox, errorMessage, esc, field, fmtTime, kv, table, toast } from '../ui.js';
 
-const state = { q: '', channelId: '', city: '', salaryStatus: '' };
+const state = { q: '', channelId: '', city: '', salaryStatus: '', salaryPeriod: '', variableScope: '' };
 
 function openPost(post) {
+  const pkg = post.salary_package || {};
+  const variableItems = (pkg.variable_items || [])
+    .map((item) => `<div class="row"><span>${esc(item.label || '浮动收入')}</span><b class="mono">${item.quantified ? '已量化计入' : '未量化，不计数'}</b></div>`)
+    .join('');
   drawer({
     title: `${post.company_raw} · ${post.title_raw}`,
     subtitle: `${post.channel_name || post.channel_code} · ${post.external_id} · ${post.city}`,
     body: `${kv([
       ['薪资原值', `<b class="mono">${esc(post.salary_raw)}</b>`],
       ['口径状态', parseBadge(post)],
-      ['归一后月薪', `<span class="tabular">${salaryRange(post.monthly_low, post.monthly_high)}</span>`],
-      ['月薪中位', `<b class="tabular">${fmtMoney(post.monthly_median)}</b>`],
-      ['发薪月数', `<span class="mono">${post.months}</span>`],
+      ['计算周期', esc(post.salary_period_label || post.salary_period || '—')],
+      ['发薪月数', `<span class="mono">${post.months}${pkg.months_explicit ? '' : '（缺省）'}</span>`],
+      ['固定月薪', `<span class="tabular">${salaryRange(post.monthly_low, post.monthly_high)}</span>`],
+      ['浮动月薪', pkg.variable_monthly_low === null || pkg.variable_monthly_low === undefined ? '未量化' : `<span class="tabular">${salaryRange(pkg.variable_monthly_low, pkg.variable_monthly_high)}</span>`],
+      ['含浮动月薪', pkg.total_monthly_low === null || pkg.total_monthly_low === undefined ? '—' : `<span class="tabular">${salaryRange(pkg.total_monthly_low, pkg.total_monthly_high)}</span>`],
+      ['可比月薪（排序口径）', `<b class="tabular">${salaryRange(post.comparable_monthly_low, post.comparable_monthly_high)}</b>`],
+      ['可比中位', `<b class="tabular">${fmtMoney(post.comparable_monthly_median)}</b>`],
+      ['是否含浮动', post.has_variable ? `是（${esc(variableScopeText(post.variable_scope))}）` : '否'],
       ['口径置信度', `<span class="mono">${Number(post.salary_confidence).toFixed(2)}</span>`],
       ['学历 / 经验', `${esc(post.degree_label)} · ${esc(post.experience_label)}`],
       ['发布时间', fmtTime(post.published_at)],
@@ -22,8 +31,9 @@ function openPost(post) {
       ['公司归一键', `<span class="mono">${esc(post.company_norm)}</span>`],
       ['职位词干', `<span class="mono">${esc(post.title_stem)}</span>`],
     ])}
-    <h3 style="margin:12px 0 6px;font-size:0.98rem">归一说明</h3>
-    <pre class="code">${esc(post.salary_basis || '—')}</pre>
+    ${variableItems ? `<h3 style="margin:12px 0 6px;font-size:0.98rem">浮动项目</h3><div class="ledger">${variableItems}</div>` : ''}
+    <h3 style="margin:12px 0 6px;font-size:0.98rem">换算过程</h3>
+    <pre class="code">${esc((pkg.basis_steps || [post.salary_basis]).filter(Boolean).join('\n') || '—')}</pre>
     <h3 style="margin:12px 0 6px;font-size:0.98rem">原始岗位文本</h3>
     <pre class="code">${esc(post.raw_text || '—')}</pre>`,
   });
@@ -35,13 +45,16 @@ function previewBlock(result) {
   }
   return `${kv([
     ['口径状态', parseBadge(result)],
-    ['名义月薪', result.salary_low === null ? '不可比' : `${fmtMoney(result.salary_low)} – ${fmtMoney(result.salary_high)}`],
-    ['归一后月薪', salaryRange(result.monthly_low, result.monthly_high)],
-    ['月薪中位', `<b class="tabular">${fmtMoney(result.monthly_median)}</b>`],
-    ['发薪月数', `<span class="mono">${result.months}</span>`],
+    ['计算周期', esc(result.period_label || result.period || '—')],
+    ['发薪月数', `<span class="mono">${result.months}${result.months_explicit ? '' : '（缺省）'}</span>`],
+    ['固定月薪', salaryRange(result.fixed_monthly_low, result.fixed_monthly_high)],
+    ['浮动月薪', result.variable_monthly_low === null || result.variable_monthly_low === undefined ? '未量化' : salaryRange(result.variable_monthly_low, result.variable_monthly_high)],
+    ['含浮动月薪', result.total_monthly_low === null || result.total_monthly_low === undefined ? '—' : salaryRange(result.total_monthly_low, result.total_monthly_high)],
+    ['可比月薪中位', `<b class="tabular">${fmtMoney(result.comparable_monthly_median)}</b>`],
+    ['是否含浮动', result.has_variable ? `是（${esc(result.variable_scope_label || variableScopeText(result.variable_scope))}）` : '否'],
     ['置信度', `<span class="mono">${Number(result.confidence).toFixed(2)}</span>`],
   ])}
-  <pre class="code" style="margin-top:10px">${esc(result.norm_basis)}</pre>`;
+  <pre class="code" style="margin-top:10px">${esc((result.basis_steps || [result.norm_basis]).filter(Boolean).join('\n'))}</pre>`;
 }
 
 export const postsPage = {
@@ -57,6 +70,8 @@ export const postsPage = {
           channel_id: state.channelId,
           city: state.city,
           salary_status: state.salaryStatus,
+          salary_period: state.salaryPeriod,
+          variable_scope: state.variableScope,
           limit: 60,
         }),
         api.get('/api/channels'),
@@ -95,6 +110,18 @@ export const postsPage = {
                   value: state.salaryStatus,
                   options: [{ value: '', label: '全部' }, ...Object.entries(ENUMS.parseStatus).map(([value, label]) => ({ value, label }))],
                 },
+                {
+                  label: '计算周期',
+                  name: 'salary_period',
+                  value: state.salaryPeriod,
+                  options: [{ value: '', label: '全部' }, ...Object.entries(ENUMS.payPeriod).map(([value, label]) => ({ value, label }))],
+                },
+                {
+                  label: '浮动收入',
+                  name: 'variable_scope',
+                  value: state.variableScope,
+                  options: [{ value: '', label: '全部' }, ...Object.entries(ENUMS.variableScope).map(([value, label]) => ({ value, label }))],
+                },
               ],
               actions: can(ctx.user.role, 'export:read')
                 ? '<button class="btn sm ghost" id="export-posts">导出岗位口径 CSV</button>'
@@ -113,18 +140,29 @@ export const postsPage = {
                         `<b>${esc(row.title_raw)}</b><div class="cell-sub">${esc(row.company_raw)} · ${esc(row.channel_code)}</div>`,
                     },
                     { key: 'city', label: '城市', className: 'tight' },
-                    { key: 'salary_raw', label: '薪资原值', className: 'mono' },
                     {
-                      key: 'monthly_median',
-                      label: '归一后月薪',
+                      key: 'salary_raw',
+                      label: '薪资原值 / 周期',
+                      className: 'mono',
+                      render: (row) => `${esc(row.salary_raw)}<div class="cell-sub">${esc(ENUMS.payPeriod[row.salary_period] || row.salary_period || '—')} · ${esc(row.months)} 薪</div>`,
+                    },
+                    {
+                      key: 'monthly_low',
+                      label: '固定月薪',
                       className: 'num',
                       render: (row) => salaryRange(row.monthly_low, row.monthly_high),
                     },
                     {
-                      key: 'monthly_median_value',
-                      label: '中位',
+                      key: 'has_variable',
+                      label: '浮动',
+                      className: 'tight',
+                      render: (row) => (row.has_variable ? esc(variableScopeText(row.variable_scope)) : '<span class="muted">无</span>'),
+                    },
+                    {
+                      key: 'comparable_monthly_median',
+                      label: '可比中位',
                       className: 'num',
-                      render: (row) => fmtMoney(row.monthly_median),
+                      render: (row) => fmtMoney(row.comparable_monthly_median),
                     },
                     { key: 'salary_status', label: '口径', render: (row) => parseBadge(row) },
                     { key: 'published_at', label: '发布', className: 'tight', render: (row) => fmtTime(row.published_at) },
@@ -156,7 +194,7 @@ export const postsPage = {
                 )
                 .join('')}
             </div>
-            <div class="panel-note">以上中位由 <span class="mono">GET /api/salary/samples</span> 实时返回；月薪中位 = 区间中位 × 12 ÷ 发薪月数，年薪先 ÷ 12，面议与矛盾区间进不可比清单。</div>
+            <div class="panel-note">以上中位由 <span class="mono">GET /api/salary/samples</span> 实时返回；月薪按 × 12 ÷ 发薪月数折算，年薪先 ÷ 12，日薪按 21.75 工作日/月折算；提成、年终奖单独标注是否量化，面议与矛盾区间进不可比清单。</div>
           </section>
         </div>
       </div>`;
@@ -166,6 +204,8 @@ export const postsPage = {
       state.channelId = values.channel_id || '';
       state.city = values.city || '';
       state.salaryStatus = values.salary_status || '';
+      state.salaryPeriod = values.salary_period || '';
+      state.variableScope = values.variable_scope || '';
       render();
     });
     view.querySelectorAll('table.data tbody tr').forEach((row) => {

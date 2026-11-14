@@ -25,10 +25,23 @@ class Cluster(Base):
     title_display: Mapped[str] = mapped_column(String(200))
     city: Mapped[str] = mapped_column(String(40), index=True)
 
+    # salary_low/high/monthly_median 只来自「被采用的那一条来源」，绝不跨来源拼区间
     salary_low: Mapped[int | None] = mapped_column(Integer, nullable=True)
     salary_high: Mapped[int | None] = mapped_column(Integer, nullable=True)
     monthly_median: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     salary_basis: Mapped[str] = mapped_column(Text, default="")
+
+    # 薪资包结论：comparable / inconsistent / noncomparable
+    salary_status: Mapped[str] = mapped_column(String(24), default="noncomparable", index=True)
+    salary_adopted_post_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_source_count: Mapped[int] = mapped_column(Integer, default=0)
+    salary_comparable_sources: Mapped[int] = mapped_column(Integer, default=0)
+    salary_noncomparable_sources: Mapped[int] = mapped_column(Integer, default=0)
+    has_variable: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    variable_scope: Mapped[str] = mapped_column(String(24), default="none")
+    salary_sources: Mapped[list] = mapped_column(JSON, default=list)
+    salary_differences: Mapped[list] = mapped_column(JSON, default=list)
+    salary_adopted: Mapped[dict] = mapped_column(JSON, default=dict)
 
     member_ids: Mapped[list] = mapped_column(JSON, default=list)
     channels: Mapped[list] = mapped_column(JSON, default=list)

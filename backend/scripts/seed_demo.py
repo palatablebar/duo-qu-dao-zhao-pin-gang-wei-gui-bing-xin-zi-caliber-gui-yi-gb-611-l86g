@@ -123,6 +123,13 @@ def ensure_posts(db) -> int:
         post.monthly_median = derived["monthly_median"]
         post.salary_basis = derived["salary_basis"]
         post.salary_confidence = derived["salary_confidence"]
+        post.salary_package = derived["salary_package"]
+        post.salary_period = derived["salary_period"]
+        post.comparable_monthly_low = derived["comparable_monthly_low"]
+        post.comparable_monthly_high = derived["comparable_monthly_high"]
+        post.comparable_monthly_median = derived["comparable_monthly_median"]
+        post.has_variable = derived["has_variable"]
+        post.variable_scope = derived["variable_scope"]
         post.degree = derived["degree"]
         post.experience = derived["experience"]
         post.published_at = spec["published_at"]
@@ -143,7 +150,13 @@ def ensure_run(db) -> Run:
             existing_clusters = db.scalar(
                 select(func.count()).select_from(Cluster).where(Cluster.run_id == run.id)
             ) or 0
-            if existing_clusters:
+            missing_packages = db.scalar(
+                select(func.count())
+                .select_from(Cluster)
+                .where(Cluster.run_id == run.id, Cluster.salary_sources.is_(None))
+            ) or 0
+            # 老库升级后簇还在但没有薪资包明细：重算一次补齐，不丢原始岗位
+            if existing_clusters and not missing_packages:
                 return run
             run_service.execute_run(db, run)
             return run
